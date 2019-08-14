@@ -21,6 +21,7 @@ import (
 	"github.com/GoogleCloudPlatform/k8s-cloud-provider/pkg/cloud/meta"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	backendconfigv1beta1 "k8s.io/ingress-gce/pkg/apis/backendconfig/v1beta1"
 	"k8s.io/ingress-gce/pkg/backends/features"
 	"k8s.io/ingress-gce/pkg/composite"
 	"k8s.io/ingress-gce/pkg/flags"
@@ -256,6 +257,10 @@ func (s *backendSyncer) ensureHealthCheck(sp utils.ServicePort, hasLegacyHC bool
 			klog.V(4).Infof("Applying httpGet settings of readinessProbe to health check on port %+v", sp)
 			applyProbeSettingsToHC(probe, hc)
 		}
+		if sp.BackendConfig != nil && sp.BackendConfig.Spec.HealthCheck != nil {
+			klog.V(4).Infof("Applying health check overrides to health check on port %+v", sp)
+			applyHCOverrides(sp.BackendConfig.Spec.HealthCheck, hc)
+		}
 	}
 
 	return s.healthChecker.Sync(hc)
@@ -315,5 +320,14 @@ func applyProbeSettingsToHC(p *v1.Probe, hc *healthchecks.HealthCheck) {
 	} else {
 		// For IG mode, short healthcheck interval may health check flooding problem.
 		hc.CheckIntervalSec = int64(p.PeriodSeconds) + int64(healthchecks.DefaultHealthCheckInterval.Seconds())
+	}
+}
+
+func applyHCOverrides(hcConfig *backendconfigv1beta1.HealthCheckConfig, hc *healthchecks.HealthCheck) {
+	if len(hcConfig.RequestPath) > 0 {
+		hc.RequestPath = hcConfig.RequestPath
+	}
+	if len(hcConfig.Host) > 0 {
+		hc.Host = hcConfig.Host
 	}
 }

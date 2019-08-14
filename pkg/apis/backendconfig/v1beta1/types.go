@@ -42,6 +42,7 @@ type BackendConfigSpec struct {
 	TimeoutSec         *int64                    `json:"timeoutSec,omitempty"`
 	ConnectionDraining *ConnectionDrainingConfig `json:"connectionDraining,omitempty"`
 	SessionAffinity    *SessionAffinityConfig    `json:"sessionAffinity,omitempty"`
+	HealthCheck        *HealthCheckConfig        `json:"healthCheck,omitempty"`
 }
 
 // BackendConfigStatus is the status for a BackendConfig resource
@@ -124,4 +125,11 @@ type ConnectionDrainingConfig struct {
 type SessionAffinityConfig struct {
 	AffinityType         string `json:"affinityType,omitempty"`
 	AffinityCookieTtlSec *int64 `json:"affinityCookieTtlSec,omitempty"`
+}
+
+// HealthCheckConfig contains configuration for overriding GCE Health check values
+// +k8s:openapi-gen=true
+type HealthCheckConfig struct {
+	RequestPath string `json:"requestPath,omitempty"`
+	Host        string `json:"host,omitempty"`
 }
