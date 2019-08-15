@@ -31,6 +31,7 @@ import (
 	compute "google.golang.org/api/compute/v1"
 	"google.golang.org/api/googleapi"
 	api_v1 "k8s.io/api/core/v1"
+	backendconfigv1beta1 "k8s.io/ingress-gce/pkg/apis/backendconfig/v1beta1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/ingress-gce/pkg/annotations"
@@ -127,6 +128,29 @@ var (
 			},
 		},
 	}
+
+	// see TestSync for usage
+	overridenProbe = &api_v1.Probe{
+		Handler: api_v1.Handler{
+			HTTPGet: &api_v1.HTTPGetAction{
+				Scheme: api_v1.URISchemeHTTPS,
+				Path:   "/my-special-path",
+				Port: intstr.IntOrString{
+					Type:   intstr.Int,
+					IntVal: 9090,
+				},
+			},
+		},
+	}
+
+	backendConfigHealthCheck = &backendconfigv1beta1.BackendConfig{
+		Spec: backendconfigv1beta1.BackendConfigSpec{
+			HealthCheck: &backendconfigv1beta1.HealthCheckConfig{
+				RequestPath: "/healthz/ready",
+				Host: "my.favorite.host",
+			},
+		},
+	}
 )
 
 func newTestSyncer(fakeGCE *gce.Cloud) *backendSyncer {
@@ -141,7 +165,11 @@ func newTestSyncer(fakeGCE *gce.Cloud) *backendSyncer {
 		cloud:         fakeGCE,
 	}
 
-	probes := map[utils.ServicePort]*api_v1.Probe{{NodePort: 443, Protocol: annotations.ProtocolHTTPS}: existingProbe}
+	probes := map[utils.ServicePort]*api_v1.Probe{
+		{NodePort: 443, Protocol: annotations.ProtocolHTTPS}: existingProbe,
+		{NodePort: 8080, Protocol: annotations.ProtocolHTTP, BackendConfig: backendConfigHealthCheck}: existingProbe,
+		{NodePort: 9090, Protocol: annotations.ProtocolHTTP, BackendConfig: backendConfigHealthCheck}: overridenProbe,
+	}
 	syncer.Init(NewFakeProbeProvider(probes))
 
 	// Add standard hooks for mocking update calls. Each test can set a different update hook if it chooses to.
@@ -165,6 +193,10 @@ func TestSync(t *testing.T) {
 		// Note: 443 gets its healthcheck from a probe
 		{NodePort: 443, Protocol: annotations.ProtocolHTTPS},
 		{NodePort: 3000, Protocol: annotations.ProtocolHTTP2},
+		// Note: 8080 is expected to have its healthcheck set by backendconfig with a probe existing for another port
+		{NodePort: 8080, Protocol: annotations.ProtocolHTTP, BackendConfig: backendConfigHealthCheck},
+		// Note: 9090 is expected to have its healthcheck set by backendconfig despite having a probe set for the same port
+		{NodePort: 9090, Protocol: annotations.ProtocolHTTP, BackendConfig: backendConfigHealthCheck},
 	}
 
 	for _, sp := range testCases {
@@ -194,6 +226,14 @@ func TestSync(t *testing.T) {
 
 			if sp.NodePort == 443 && hc.RequestPath != "/my-special-path" {
 				t.Fatalf("Healthcheck for 443 should have special request path from probe")
+			}
+
+			if sp.NodePort == 8080 && hc.RequestPath != "/healthz/ready" {
+				t.Fatalf("Healthcheck for 8080 should have the request path from the backendconfig")
+			}
+
+			if sp.NodePort == 9090 && hc.RequestPath != "/healthz/ready" {
+				t.Fatalf("Healthcheck for 9090 should have the request path from the backendconfig but instead has: %v", hc.RequestPath)
 			}
 		})
 	}
@@ -587,6 +627,31 @@ func TestApplyProbeSettingsToHC(t *testing.T) {
 	}
 	if hc.RequestPath != "/"+p {
 		t.Errorf("Failed to apply probe's requestpath")
+	}
+}
+
+func TestApplyHCOverrides(t *testing.T) {
+	path := "/healthz"
+	host := "my.favorite.hostname"
+	hc := healthchecks.DefaultHealthCheck(8080, annotations.ProtocolHTTP)
+	sp := &utils.ServicePort{
+		BackendConfig: &backendconfigv1beta1.BackendConfig{
+			Spec: backendconfigv1beta1.BackendConfigSpec{
+				HealthCheck: &backendconfigv1beta1.HealthCheckConfig{
+					RequestPath: path,
+					Host: host,
+				},
+			},
+		},
+	}
+
+	applyHCOverrides(sp.BackendConfig.Spec.HealthCheck, hc)
+
+	if hc.Host != host {
+		t.Errorf("HC host doesn't match expected value")
+	}
+	if hc.RequestPath != path {
+		t.Errorf("HC requestpath doesn't match expected value")
 	}
 }
 
